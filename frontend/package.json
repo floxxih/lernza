@@ -12,7 +12,7 @@
     "predev": "node scripts/check-env.mjs",
     "dev": "vite",
     "validate:assets": "node scripts/validate-public-assets.mjs",
-    "prebuild": "node scripts/validate-public-assets.mjs",
+    "prebuild": "node scripts/validate-public-assets.mjs && node scripts/validate-index-meta.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",

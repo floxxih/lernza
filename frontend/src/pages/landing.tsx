@@ -16,7 +16,10 @@ import {
 import { Button } from "@/components/ui/button"
 import { useInView, useTypewriter } from "@/hooks/use-animations"
 import { PlatformStats } from "./dashboard/platform-stats"
-import { MOCK_PLATFORM_STATS } from "@/lib/mock-data"
+import { MOCK_PLATFORM_STATS, MOCK_TRENDING_QUESTS, MOCK_WORKSPACE_STATS } from "@/lib/mock-data"
+import { questClient, type QuestInfo } from "@/lib/contracts/quest"
+import { rewardsClient } from "@/lib/contracts/rewards"
+import { formatTokens } from "@/lib/utils"
 
 function XIcon({ className }: { className?: string }) {
   return (
@@ -216,6 +219,167 @@ function MarqueeBanner() {
   )
 }
 
+type FeaturedQuest = {
+  id: number
+  name: string
+  description: string
+  deadline?: number
+  poolBalance?: bigint
+  enrolleeCount?: number
+}
+
+function pickFeaturedQuest(quests: Array<(QuestInfo & { poolBalance?: bigint; enrolleeCount?: number })>) {
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const eligible = quests.filter(q => q.visibility === 0 && q.status === 0 && q.deadline > nowSeconds)
+  if (eligible.length === 0) return null
+
+  const sorted = [...eligible].sort((a, b) => {
+    const poolA = a.poolBalance ?? 0n
+    const poolB = b.poolBalance ?? 0n
+    if (poolA !== poolB) return poolA > poolB ? -1 : 1
+    return a.deadline - b.deadline
+  })
+
+  const top = sorted[0]
+  return {
+    id: top.id,
+    name: top.name,
+    description: top.description,
+    deadline: top.deadline,
+    poolBalance: top.poolBalance,
+    enrolleeCount: top.enrolleeCount,
+  } satisfies FeaturedQuest
+}
+
+function QuestOfTheDay() {
+  const navigate = useNavigate()
+  const [featured, setFeatured] = useState<FeaturedQuest | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
+      const publicQuests = await questClient.listPublicQuests(0, 20)
+      if (publicQuests.length === 0) {
+        const fallback = MOCK_TRENDING_QUESTS[0]
+        if (!fallback) return
+        const stats = MOCK_WORKSPACE_STATS[fallback.id]
+        if (!cancelled) {
+          setFeatured({
+            id: fallback.id,
+            name: fallback.name,
+            description: fallback.description,
+            poolBalance: stats ? BigInt(stats.poolBalance) : undefined,
+            enrolleeCount: stats?.enrolleeCount,
+          })
+        }
+        return
+      }
+
+      const enriched = await Promise.all(
+        publicQuests.map(async q => {
+          const [poolBalance, enrollees] = await Promise.all([
+            rewardsClient.getPoolBalance(q.id),
+            questClient.getEnrollees(q.id),
+          ])
+          return { ...q, poolBalance, enrolleeCount: enrollees.length }
+        })
+      )
+
+      const picked = pickFeaturedQuest(enriched)
+      if (!picked) {
+        const first = enriched[0]
+        if (!first) return
+        if (!cancelled) {
+          setFeatured({
+            id: first.id,
+            name: first.name,
+            description: first.description,
+            deadline: first.deadline,
+            poolBalance: first.poolBalance,
+            enrolleeCount: first.enrolleeCount,
+          })
+        }
+        return
+      }
+
+      if (!cancelled) setFeatured(picked)
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const poolBalanceText =
+    featured?.poolBalance !== undefined ? `${formatTokens(featured.poolBalance)} USDC` : "—"
+
+  return (
+    <section className="bg-secondary border-border border-b-[3px] py-16 sm:py-20">
+      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6">
+        <div className="mb-10 flex items-end justify-between gap-6">
+          <div>
+            <div className="bg-primary border-border inline-flex items-center gap-2 border-2 px-3 py-1.5 text-xs font-black tracking-wider uppercase shadow-[3px_3px_0_var(--color-border)]">
+              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+              Quest of the day
+            </div>
+            <h2 className="mt-5 text-3xl font-black sm:text-4xl">Start here, earn faster</h2>
+            <p className="text-muted-foreground mt-2 max-w-xl text-base font-medium">
+              Featured from live on-chain quests. Ranked by funding pool, then nearest deadline.
+            </p>
+          </div>
+
+          <Button variant="secondary" className="hidden sm:inline-flex" onClick={() => navigate("/dashboard")}>
+            Browse quests
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </div>
+
+        <div className="border-border bg-card text-card-foreground overflow-hidden border-[3px] shadow-[6px_6px_0_var(--color-border)]">
+          <div className="bg-primary border-border flex items-center justify-between gap-4 border-b-[3px] px-6 py-3">
+            <span className="text-xs font-black tracking-wider uppercase">Featured quest</span>
+            <div className="flex items-center gap-5 text-xs font-bold">
+              <span className="flex items-center gap-2">
+                <Users className="h-4 w-4" aria-hidden="true" />
+                {featured?.enrolleeCount ?? "—"} enrolled
+              </span>
+              <span className="flex items-center gap-2">
+                <Coins className="h-4 w-4" aria-hidden="true" />
+                {poolBalanceText} pool
+              </span>
+            </div>
+          </div>
+
+          <div className="p-6 sm:p-8">
+            <h3 className="text-2xl font-black">{featured?.name ?? "Loading…"}</h3>
+            <p className="text-muted-foreground mt-3 max-w-3xl text-base leading-relaxed">
+              {featured?.description ??
+                "Fetching the most funded, time-sensitive quest from the chain. If none qualify, a curated default is shown."}
+            </p>
+
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Button
+                className="shimmer-on-hover group"
+                onClick={() => {
+                  if (featured) navigate(`/quest/${featured.id}`)
+                }}
+                disabled={!featured}
+              >
+                View quest
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" aria-hidden="true" />
+              </Button>
+              <Button variant="secondary" onClick={() => navigate("/dashboard")}>
+                Explore more
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 /* ─── Main Landing Component ─── */
 
 export function Landing() {
@@ -348,6 +512,8 @@ export function Landing() {
           <MarqueeBanner />
         </div>
       </section>
+
+      <QuestOfTheDay />
 
       {/* HOW IT WORKS */}
       <section
