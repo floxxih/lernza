@@ -1470,7 +1470,9 @@ fn test_verify_completion_fails_if_flat_reward_missing() {
 
     // Set mode to Flat manually in storage without setting FlatReward
     env.as_contract(&client.address, || {
-        env.storage().persistent().set(&DataKey::Mode(q_id), &DistributionMode::Flat);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Mode(q_id), &DistributionMode::Flat);
     });
 
     let enrollee = Address::generate(&env);
